@@ -20,7 +20,7 @@ HISTORY_LENGTH = 10 # Максимальная длина вывода стат�
 # Создайте бот
 bot = telebot.TeleBot(TOKEN)
 # Подключение к базе данных пользователей SQLite
-users_db = sqlite3.connect('databases/ntc_users.db', check_same_thread=False)
+users_db = sqlite3.connect('./../databases/ntc_users.db', check_same_thread=False)
 cursor_user = users_db.cursor()
 # Создание БД пользователей, если она не существует
 with lock:
@@ -35,7 +35,7 @@ with lock:
   )''')
 users_db.commit()
 # Подключение к базе данных транзакций SQLite
-transactions_db = sqlite3.connect('databases/ntc_transactions.db', check_same_thread=False)
+transactions_db = sqlite3.connect('./../databases/ntc_transactions.db', check_same_thread=False)
 cursor_tran = transactions_db.cursor()
 # Создание БД транзакций, если она не существует
 with lock:
@@ -161,9 +161,13 @@ def start(message):
     cursor_user.execute("SELECT * FROM users WHERE id = ?", (user_id,))
     user = cursor_user.fetchone()
   if user is None:
-    cursor_user.execute("INSERT INTO users (id, username) VALUES (?, ?)", (user_id, username))
-    users_db.commit()
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give- передать несколько Ничего пользователю\n2. /balance - проверить свой текущий баланс\n3. /history - посмотреть историю транзакций\n4./stats - посмотреть cвою статистику по транзакциям\n5. /my_stats - посмотреть свою статистику.\n\nТвой начальный баланс: {user[3]-user[2]} Ничего. Баланс может уйти в минус, ничего страшного.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
+    with lock:
+      cursor_user.execute("INSERT INTO users (id, username) VALUES (?, ?)", (user_id, username))
+      users_db.commit()
+    with lock:
+      cursor_user.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+      user = cursor_user.fetchone()
+    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give- передать несколько Ничего пользователю\n2. /balance - проверить свой текущий баланс\n3. /history - посмотреть историю транзакций\n4./stats - посмотреть cвою статистику по транзакциям\n\nТвой начальный баланс: {user[3]-user[2]} Ничего. Баланс может уйти в минус, ничего страшного.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
     print("SUCCESS: User is registered")
   else:
     bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nТы уже зарегистрирован на бирже Ничего!\n\nТвой баланс: {user[3]-user[2]} Ничего")
