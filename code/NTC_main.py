@@ -13,7 +13,8 @@ import random
 lock = threading.Lock()
 
 #Константы
-BOT_TOKEN = '7550619842:AAF7b_yAdVcDBtAeC2luFS367iYVwxeveLA' # Токен бота
+BOT_TEST_TOKEN = '7708186142:AAG5FTQmYFS14FyRHdXXYF-BphHKk5op0_U' # Токен тестовой версии бота
+BOT_RELEASE_TOKEN = '7662176920:AAGsNltswUDwT_d4Ha_IjA2neQYnpIhYx48' # Токен релизной версии бота
 TRANSACTION_LIMIT = 10 # Максимальное количество Ничего в транзакции
 HISTORY_LENGTH = 10 # Максимальная длина вывода статистики
 NOTHING_DEFAULT_MIN = 5 # Минимальное количество получаемых Ничего по умолчанию
@@ -26,6 +27,14 @@ ADMIN_LIST = { # Список людей, которые могут исполь
 }
 
 ####################################################################################################
+#Выбор режима работы (тест/релиз)
+if input("Hello! Is this a test or release?\n(Input 'R' if this is the release version)") == "R":
+  BOT_TOKEN = BOT_RELEASE_TOKEN
+  print("WARNING: RUNNING THE RELEASE MODE!")
+else:
+  BOT_TOKEN = BOT_TEST_TOKEN
+  print("SUCCESS: running the TESTING mode")
+
 # Создание бота
 bot = telebot.TeleBot(BOT_TOKEN)
 print(f'SUCCESS: Bot created!')
