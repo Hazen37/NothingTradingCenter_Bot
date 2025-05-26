@@ -9,78 +9,188 @@ import time
 import sqlite3
 import threading
 import datetime
+import random
 lock = threading.Lock()
 
 #Константы
-TOKEN = '7550619842:AAF7b_yAdVcDBtAeC2luFS367iYVwxeveLA' # Токен бота
-TRANSACTION_LIMIT = 20 # Максимальное количество ничего в транзакции
+BOT_TOKEN = '7550619842:AAF7b_yAdVcDBtAeC2luFS367iYVwxeveLA' # Токен бота
+TRANSACTION_LIMIT = 10 # Максимальное количество Ничего в транзакции
 HISTORY_LENGTH = 10 # Максимальная длина вывода статистики
+NOTHING_DEFAULT_MIN = 5 # Минимальное количество получаемых Ничего по умолчанию
+NOTHING_DEFAULT__MAX = 15 # Максимальное количество получаемых Ничего по умолчанию
+NOTHING_LOW_LIMIT = 0 # Минимальное количество Ничего у пользователя
+NOTHING_HIGH_LIMIT = None # Максимальное колтчество Ничего у пользователя
+ADMIN_LIST = { # Список людей, которые могут использовать админские функции
+  'eugenius_lesh',
+  'grechka37'
+}
 
 ####################################################################################################
-# Создайте бот
-bot = telebot.TeleBot(TOKEN)
+# Создание бота
+bot = telebot.TeleBot(BOT_TOKEN)
+print(f'SUCCESS: Bot created!')
 # Подключение к базе данных пользователей SQLite
-users_db = sqlite3.connect('./../databases/ntc_users.db', check_same_thread=False)
-cursor_user = users_db.cursor()
+SCRIPT_PATH = f'{os.path.dirname(os.path.abspath(__file__))}'
+if not os.path.exists(f"{SCRIPT_PATH}/ntc_database.db"):
+    open(f"{SCRIPT_PATH}/ntc_database.db", "w")
+    print("SUCCESS: New database file is created!")
+else:
+    print("SUCCESS: Database file is found!")
+database = sqlite3.connect(f"{SCRIPT_PATH}/ntc_database.db", check_same_thread=False)
+cursor = database.cursor()
 # Создание БД пользователей, если она не существует
-with lock:
-  cursor_user.execute('''CREATE TABLE IF NOT EXISTS 
-  users (
-  id INTEGER PRIMARY KEY,
-  username TEXT,
-  nothing_gives INTEGER DEFAULT 0,
-  nothing_takes INTEGER DEFAULT 0,
-  transactions_gives INTEGER DEFAULT 0,
-  transactions_takes INTEGER DEFAULT 0
-  )''')
-users_db.commit()
-# Подключение к базе данных транзакций SQLite
-transactions_db = sqlite3.connect('./../databases/ntc_transactions.db', check_same_thread=False)
-cursor_tran = transactions_db.cursor()
-# Создание БД транзакций, если она не существует
-with lock:
-  cursor_tran.execute('''CREATE TABLE IF NOT EXISTS 
-  transactions (
-  date TEXT PRIMARY KEY,
-  user_id_giver INTEGER,
-  user_id_taker INTEGER,
-  nothing_number INTEGER
-  )''')
-users_db.commit()
+cursor.execute('''CREATE TABLE IF NOT EXISTS 
+users (
+id INTEGER PRIMARY KEY,
+username TEXT,
+balance INTEGER DEFAULT 0
+)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS 
+transactions (
+date TEXT PRIMARY KEY,
+user_id_giver INTEGER,
+user_id_taker INTEGER,
+nothing_amount INTEGER
+)''')
+database.commit()
+print(f'SUCCESS: Database is connected!')
+
 ####################################################################################################
+#Класс пользователей
+class User:
+  def __init__(self, id:int = None, username:str = '', balance:int = None):
+    self.id = id
+    self.username = username
+    self.balance = balance
+  # Метод проверки на админа
+  def check_admin(self):
+    for admin in ADMIN_LIST:
+      if admin.lower() == self.username.lower():
+        print('SUCCESS: Access granted')
+        return (True)
+    print('ERROR: Access denied')
+    return(False)
+  #Метод по получению всех транзакций пользователя
+  def get_transactions(self):
+    transactions = []
+    with lock:
+      cursor.execute("SELECT * FROM transactions WHERE user_id_giver = ? OR user_id_taker = ?",(self.id,self.id))
+      transactions_fetch = cursor.fetchall()
+    if transactions_fetch is None: 
+      print('ERROR: Empty transactions database')
+      return(None)
+    for transaction_fetch in transactions_fetch:
+      transactions.append(Transaction(get_user(transaction_fetch[1]),get_user(transaction_fetch[2]),transaction_fetch[3],transaction_fetch[0])) 
+    return(transactions) 
+
+#Функция присвоения юзера
+def get_user(user_data):
+  #print(f"NOTE: Start user get by data:{user_data}")
+  if user_data is None:
+    print("ERROR: missing user data!")
+    return(None)
+  with lock:
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_data,))
+    user_fetch = cursor.fetchone()
+  print(user_fetch)
+  if user_fetch is None:
+    with lock:
+      cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (user_data,))
+      user_fetch = cursor.fetchone()
+  if user_fetch is None:
+      print("ERROR: missing user!")
+      return(None)
+  user = User(user_fetch[0],user_fetch[1],user_fetch[2])
+  return(user)
+ 
+#Функция присвоения полного списка юзеров
+def get_users_all():
+  users = []
+  with lock:
+    cursor.execute("SELECT * FROM users")
+    users_fetch = cursor.fetchall()
+  if users_fetch is None: 
+    print('ERROR: Empty users database')
+    return(None)
+  for user_fetch in users_fetch:
+    users.append(User(user_fetch[0],user_fetch[1],user_fetch[2]))
+  return(users) 
+
 #Класс транзакций
 class Transaction:
-  number = 0,
-  user_taker = "",
-  user_giver = "",
-#Функция транзакции
-def transaction(tr_data: Transaction, message):
+  def __init__(self, user_giver:User = User(), user_taker:User = User(), amount:int = None, date=datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y %H:%M:%S")):
+    self.user_giver = user_giver
+    self.user_taker = user_taker
+    self.amount = amount
+    self.date = date 
+  #Метод осуществления передачи
+  def transaction(self, message):
+    self.date: str = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y %H:%M:%S")
+    with lock:
+      cursor.execute("UPDATE users SET balance = balance - ? WHERE id = ?", (self.amount, self.user_giver.id))
+      cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (self.amount, self.user_taker.id))
+      database.commit()
+    self.user_giver.balance -= self.amount
+    self.user_taker.balance += self.amount
+    with lock:
+      cursor.execute("INSERT INTO transactions (date, user_id_giver, user_id_taker, nothing_amount) VALUES (?, ?, ?, ?)", (self.date, self.user_giver.id, self.user_taker.id, self.amount))
+      database.commit()
+    print("SUCCESS: Nothing is given")
+    if self.user_giver.id != user_bot.id:
+      bot.send_message(message.chat.id, f"@{self.user_giver.username} передал @{self.user_taker.username} {self.amount} Ничего!")
+    else:
+      bot.send_message(message.chat.id, f"Биржа начислила @{self.user_taker.username} {self.amount} Ничего!")
+    try:
+      member = bot.get_chat_member(chat_id=message.chat.id, user_id=self.user_taker.id)
+      print("chatmember")
+    except telebot.apihelper.ApiException as e:
+      if self.user_giver.id != user_bot.id:
+        bot.send_message(self.user_taker.id, f"Пользователь @{self.user_giver.username} передал Вам {self.amount} Ничего!\n\nВаш баланс: {self.user_taker.balance} Ничего.")
+      else:
+        bot.send_message(self.user_taker.id, f"Биржа начислила Вам {self.amount} Ничего!\n\nВаш баланс: {self.user_taker.balance} Ничего.")
+      print("notachatmember")
+      print_user_db()
+  # Проверка транзакции
+  def check_transaction(self, message):
+    if NOTHING_HIGH_LIMIT is not None:
+      if NOTHING_HIGH_LIMIT < self.user_taker.balance + self.amount:
+        print("ERROR: Taker balance overflow")
+        bot.reply_to(message, f"У получателя @{self.user_taker.username} станет слишком много ничего!\nПопробуйте отправить поменьше.")
+        return(False)
+      if NOTHING_HIGH_LIMIT < self.user_giver.balance - self.amount:
+        print("ERROR: Giver balance overflow")
+        bot.reply_to(message, f"У отправителя @{self.user_giver.username} станет слишком много ничего!\nПопробуйте отправить побольше.")
+        return(False)
+    if NOTHING_LOW_LIMIT is not None:
+      if NOTHING_LOW_LIMIT > self.user_giver.balance - self.amount:
+        print("ERROR: Giver balance underflow")
+        bot.reply_to(message, f"{message.from_user.first_name}, у тебя нет столько ничего! Твой баланс {self.user_giver.balance} Ничего.\nПопроси у кого-нибудь еще!")
+        return(False)
+      if NOTHING_LOW_LIMIT > self.user_taker.balance + self.amount:
+        print("ERROR: Taker balance underflow")
+        bot.reply_to(message, f"{message.from_user.first_name}, у пользователя @{self.user_taker.username} станет слишком мало ничего!\nЕго баланс сейчас: {self.user_taker.balance} Ничего.")
+        return(False)
+    return(True)
+
+#Функция по получению всех транзакций
+def get_transactions_all():
+  transactions = []
   with lock:
-    cursor_user.execute("UPDATE users SET nothing_gives = nothing_gives + ? WHERE id = ?", (tr_data.number, tr_data.user_giver[0]))
-    cursor_user.execute("UPDATE users SET transactions_gives = transactions_gives + 1 WHERE id = ?", (tr_data.user_giver[0],))
-    cursor_user.execute("UPDATE users SET nothing_takes = nothing_takes + ? WHERE id = ?", (tr_data.number, tr_data.user_taker[0]))
-    cursor_user.execute("UPDATE users SET transactions_takes = transactions_takes + 1 WHERE id = ?", (tr_data.user_taker[0],))
-    users_db.commit()
-  datenow = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y %H:%M:%S")
-  with lock:
-    cursor_tran.execute("INSERT INTO transactions (date, user_id_giver, user_id_taker, nothing_number) VALUES (?, ?, ?, ?)", (datenow, tr_data.user_giver[0], tr_data.user_taker[0], tr_data.number))
-    transactions_db.commit()
-  bot.send_message(message.chat.id, f"@{tr_data.user_giver[1]} передал @{tr_data.user_taker[1]} {tr_data.number} Ничего!")
-  print("SUCCESS: Nothing is given")
-  try:
-    member = bot.get_chat_member(chat_id=message.chat.id, user_id=tr_data.user_taker[0])
-    print("chatmember")
-  except telebot.apihelper.ApiException as e:
-    bot.send_message(tr_data.user_taker[0], f"Пользователь @{tr_data.user_giver[1]} передал Вам {tr_data.number} Ничего!")
-    print("notachatmember")
-    print_user_db()
+    cursor.execute("SELECT * FROM transactions")
+    transactions_fetch = cursor.fetchall()
+  if transactions_fetch is None: 
+    print('ERROR: Empty transactions database')
+    return(None)
+  for transaction_fetch in transactions_fetch:
+    transactions.append(Transaction(get_user(transaction_fetch[1]),get_user(transaction_fetch[2]),transaction_fetch[3],transaction_fetch[0])) 
+  return(transactions) 
 
 #Функция для вывода базы данных пользователей
 def print_user_db():
   with lock:
-    cursor_user.execute("SELECT * FROM users") # Выполнение запроса
-    rows = cursor_user.fetchall() # Получение данных
-  print("Printing database:\n id | username | n_given | n_taken | t_given | t_taken")
+    cursor.execute("SELECT * FROM users") # Выполнение запроса
+    rows = cursor.fetchall() # Получение данных
+  print("Printing database:\n id | username | balance ")
   for row in rows: # Вывод данных
     print(row)
   print("\n")
@@ -88,9 +198,9 @@ def print_user_db():
 #Функция для вывода базы данных транзакций
 def print_trans_db():
   with lock:
-    cursor_tran.execute("SELECT * FROM transactions") # Выполнение запроса
-    rows = cursor_tran.fetchall() # Получение данных
-  print("Printing database:\n date | user_id_giver | user_id_taker | nothing_number")
+    cursor.execute("SELECT * FROM transactions") # Выполнение запроса
+    rows = cursor.fetchall() # Получение данных
+  print("Printing database:\n date | user_id_giver | user_id_taker | nothing_amount")
   for row in rows: # Вывод данных
     print(row)
   print("\n")
@@ -100,77 +210,103 @@ def print_message(message):
    
 #####################################################################################################
 #Блок Функций проверок
-#Проверка на количество Ничего
-def check_number(number, message):
-    try:
-        number = int(number)
-    except ValueError:
-        print("ERROR: Invalid number")
-        bot.reply_to(message, "Неверное количество Ничего!")
-        return(False)
-    #Проверка на нулевую передачу Ничего
-    if number == 0  :
-        print("ERROR: Zero transaction")
-        bot.reply_to(message, "Ха-ха, у нас тут Клоун. Вы не можете передать 0 Ничего!")
-        return(False)
-    #Проверка на отрицательную передачу Ничего
-    if number < 0  :
-        print("ERROR: Negative transaction")
-        bot.reply_to(message, "Ого, да Вы умны! Но к сожалению, Вы не можете передать отрицательное количество Ничего!")
-        return(False)
-    #Проверка на большое количество Ничего
-    if number > TRANSACTION_LIMIT:
-        print("ERROR: Large transaction")
-        bot.reply_to(message, f"Вы не можете передать больше {TRANSACTION_LIMIT} Ничего! Это Вам не деньги, чтобы их так тратить!")
-        return(False)
+
+#Проверка наличия пользователя в базе
+def check_user(user_data):
+  print(f"NOTE: Start user check by data: {user_data}")
+  user = get_user(user_data)
+  if user is None:
+    #bot.reply_to(message, f"@{username}: Пользователь не найден!")
+    print("ERROR: User is not found")
+    return(False)
+  else:
     return(True)
+
+#Проверка на количество Ничего
+def check_amount(amount, message):
+  try:
+    amount = int(amount)
+  except ValueError:
+    print("ERROR: Invalid amount")
+    bot.reply_to(message, "Неверное количество Ничего!")
+    return(False)
+  #Проверка на нулевую передачу Ничего
+  if amount == 0  :
+    print("ERROR: Zero transaction")
+    bot.reply_to(message, "Ха-ха, у нас тут Клоун. Вы не можете передать 0 Ничего!")
+    return(False)
+  #Проверка на отрицательную передачу Ничего
+  if amount < 0  :
+    print("ERROR: Negative transaction")
+    bot.reply_to(message, "Ого, да Вы умны! Но к сожалению, Вы не можете передать отрицательное количество Ничего!")
+    return(False)
+  #Проверка на большое количество Ничего
+  if amount > TRANSACTION_LIMIT:
+    print("ERROR: Large transaction")
+    bot.reply_to(message, f"Вы не можете передать больше {TRANSACTION_LIMIT} Ничего! Это Вам не деньги, чтобы их так тратить!")
+    return(False)
+  return(True)
+
+def check_amount_admin(amount, message):
+  try:
+    amount = int(amount)
+  except ValueError:
+    print("ERROR: Invalid amount")
+    bot.reply_to(message, "Неверное количество Ничего!")
+    return(False)
+  return(True)
 
 #Проверка получающего
-def check_taker(username_taker,user_giver, message):
-    cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
-    user_taker = cursor_user.fetchone()
-    if user_taker is None:
-        print("ERROR: Taker is not found")
-        bot.reply_to(message, f"{username_taker}: Пользователь не найден!")
-        return(False)
+def check_taker(user_taker:User,user_giver:User, message):
+  if user_taker is None:
+    print("ERROR: Taker is not found")
+    bot.reply_to(message, f"{message.text}: Пользователь не найден!")
+    return(False)
     #Проверка на отправление себе
-    if user_giver[0] == user_taker[0]:
-        print("ERROR: Giver is taker")
-        bot.reply_to(message, "Ха-ха, очень смешно. Вы не можете отправить самому себе Ничего!")
-        return(False)
-    return(True)
+  if user_giver.id == user_taker.id:
+      print("ERROR: Giver is taker")
+      bot.reply_to(message, "Ха-ха, очень смешно. Вы не можете отправить самому себе Ничего!")
+      return(False)
+  if user_taker.id == user_bot.id:
+      print("ERROR: Taker is bot")
+      bot.reply_to(message, "Увы, Вы не можете передать Ничего боту! Почему Вы вообще попробовали это сделать?")
+      return(False)
+  return(True)
 
-#Проверка отправляющего
-def check_sender(user_giver, message):
-    if user_giver is None:
-        print("ERROR: Giver is not found")
-        bot.reply_to(message, "Вы не зарегистрированы на бирже Ничего!")
-        return(False)
-    return(True)
+#Проверка отправляющего сообщение
+def check_sender(user_giver:User, message):
+  if user_giver is None:
+    print("ERROR: Giver is not found")
+    bot.reply_to(message, "Вы не зарегистрированы на бирже Ничего!\nЗарегистрируйтесь, чтобы начать обмениваться Ничем.")
+    return(False)
+  return(True)
 
+####################################################################################################
+#Проверка наличия Бота в БД (Для админских функций)
+user_bot = User(int(BOT_TOKEN.split(':',1)[0]),bot.get_me().username, 0)
+if check_user(user_bot.id) == False:
+  with lock:
+    cursor.execute("INSERT INTO users (id, username, balance) VALUES (?, ?, ?)", (user_bot.id, user_bot.username, user_bot.balance))
+    database.commit()
+    print(f'SUCCESS: Bot user is added!')
+
+####################################################################################################
 ####################################################################################################
 # Обработчик команды /start
 
 @bot.message_handler(commands=['start'])
 def start(message):
   print_message(message)
-  user_id = message.from_user.id
-  username = message.from_user.username
   # Добавьте пользователя в базу данных, если его еще нет
-  with lock:
-    cursor_user.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    user = cursor_user.fetchone()
-  if user is None:
-    with lock:
-      cursor_user.execute("INSERT INTO users (id, username) VALUES (?, ?)", (user_id, username))
-      users_db.commit()
-    with lock:
-      cursor_user.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-      user = cursor_user.fetchone()
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give- передать несколько Ничего пользователю\n2. /balance - проверить свой текущий баланс\n3. /history - посмотреть историю транзакций\n4./stats - посмотреть cвою статистику по транзакциям\n\nТвой начальный баланс: {user[3]-user[2]} Ничего. Баланс может уйти в минус, ничего страшного.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
+  if check_user(message.from_user.id) is False:
+    user = User(message.from_user.id, message.from_user.username, random.randint(NOTHING_DEFAULT_MIN, NOTHING_DEFAULT__MAX))
+    cursor.execute("INSERT INTO users (id, username, balance) VALUES (?, ?, ?)", (user.id, user.username, user.balance))
+    database.commit()
+    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give- передать несколько Ничего пользователю\n2. /balance - проверить свой текущий баланс\n3. /history - посмотреть историю транзакций\n4./stats - посмотреть cвою статистику по транзакциям\n\nТвой начальный баланс: {user.balance} Ничего.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
     print("SUCCESS: User is registered")
   else:
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nТы уже зарегистрирован на бирже Ничего!\n\nТвой баланс: {user[3]-user[2]} Ничего")
+    user = get_user(message.from_user.id)
+    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nТы уже зарегистрирован на бирже Ничего!\n\nТвой баланс: {user.balance} Ничего")
     print("SUCCESS: User is already registered, balance is sent")
   print_user_db()
   return
@@ -182,93 +318,79 @@ def start(message):
 def give(message):
   print_message(message)
   print("GIVE: step 1")
-  tr_data = Transaction()
-  with lock:
-    cursor_user.execute("SELECT * FROM users WHERE id = ? COLLATE NOCASE", (message.from_user.id,))
-    tr_data.user_giver = cursor_user.fetchone()
-  tr_data.user_taker = tr_data.user_giver
-  #Считывание команды
-  #if check_sender(tr_data.user_giver, message) == False: return
-  #if len(message.text.split(' ')) > 3:
-  #  print("MoreThan3")
-  #  print("ERROR: Invalid command")
-  #  bot.reply_to(message, "Вы ошиблись в команде! Используйте /give <Кол-во Ничего> <Username пользователя>")
-  #  return
+  transaction = Transaction(user_giver = get_user(message.from_user.id))
+  if check_sender(transaction.user_giver, message) == False: return
   #Команда с двумя аргументами
   #if len(message.text.split(' ')) == 3:
   #  print("Is3")
-  #  tr_data.number = message.text.split(' ', 2)[1]
-  #  if check_number(tr_data.number, message) == False: return
+  #  tr_data.amount = message.text.split(' ', 2)[1]
+  #  if check_amount(tr_data.amount, message) == False: return
   #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
   #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
   #  with lock:
-  #    cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
-  #    tr_data.user_taker = cursor_user.fetchone()
+  #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
+  #    tr_data.user_taker = cursor.fetchone()
   #  print("SUCCESS: Command is valid")
   #  #Отправка Ничего
   #  transaction(tr_data, message)
-  #Команда с одним аргументом или без них
-  #if len(message.text.split(' ')) < 3:
+  #  return
+  #else:
   print("GIVE: Separate commands")
   msg = bot.reply_to(message, "Напишите Username пользователя, которому хотите передать Ничего")
-  bot.register_next_step_handler(msg, give_step_taker, tr_data)
+  bot.register_next_step_handler(msg, give_step_taker, transaction)
 
-def give_step_taker(message, tr_data:Transaction):
+def give_step_taker(message, transaction:Transaction):
   print_message(message)
+  if message.from_user.id != transaction.user_giver.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{transaction.user_giver.username}, а не от @{message.from_user.username}!")
+    return
   print("GIVE: step 2")
-  print(tr_data)
-  username_taker = message.text.replace("@", "")
-  with lock:
-    cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
-    tr_data.user_taker = cursor_user.fetchone()
-  print(tr_data.user_taker)
-  if check_taker(username_taker, tr_data.user_giver, message) == False: return
+  transaction.user_taker = get_user(message.text.replace("@", ""))
+  print(transaction)
+  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
   msg = bot.reply_to(message, "Напишите количество Ничего, которое хотите передать")
-  bot.register_next_step_handler(msg, give_step_number, tr_data)
+  bot.register_next_step_handler(msg, give_step_amount, transaction)
 
-def give_step_number(message, tr_data:Transaction):
+def give_step_amount(message, transaction:Transaction):
   print_message(message)
+  if message.from_user.id != transaction.user_giver.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{transaction.user_giver.username}, а не от @{message.from_user.username}!")
+    return
   print("GIVE: step 3")
-  tr_data.number = int(message.text)
-  if check_number(tr_data.number, message) == False: return
-  #print("SUCCESS: Command is valid\n")
-  transaction(tr_data, message)
+  transaction.amount = int(message.text)
+  if check_amount(transaction.amount, message) == False: return
+  if transaction.check_transaction(message) == False: return
+  print("SUCCESS: Command is valid")
+  transaction.transaction(message)
 
 ####################################################################################################
 # Обработчик команды /balance
 
 @bot.message_handler(commands=['balance'])
 def balance(message):
+  user = User()
   print_message(message)
   usernames = message.text.split(' ')
   if len(usernames) == 1:
-    username = message.from_user.username
-    with lock:
-      cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,))
-      user = cursor_user.fetchone()
-    if user is None:
-      bot.reply_to(message, f"@{username}: Пользователь не найден!")
-      print("ERROR: User is not found")
-      return
-    else:
-      bot.send_message(message.chat.id, f"{message.from_user.first_name}, твой баланс: {user[3]-user[2]} Ничего")
-      print("SUCCESS: Balance is sent")
+    user = get_user(message.from_user.username)
+    if check_sender(user, message) == False: return
+    bot.send_message(message.chat.id, f"{message.from_user.first_name}, твой баланс: {user.balance} Ничего")
+    print("SUCCESS: Balance is sent")
   else:
-    output = ""
+    output = f"{message.from_user.first_name}, балансы запрашиваемых пользователей:\n"
     for i in range(1, len(usernames)):
-      usernames[i] = usernames[i].replace("@", "")
-      with lock:
-        cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (usernames[i],))
-        user = cursor_user.fetchone()
+      user = get_user(usernames[i].replace("@", ""))
       if user is None:
         bot.reply_to(message, f"{usernames[i]}: Пользователь не найден!")
-        print("ERROR: User is not found")
         return
       else:
-        output = f"{output}Баланс пользователя @{user[1]}: {user[3]-user[2]} Ничего\n";
+        output = f"{output}\nБаланс пользователя @{user.username}: {user.balance} Ничего\n"
       bot.send_message(message.chat.id, output)
       print("SUCCESS: Balance is sent")
   print_user_db()
+  return
 
 ####################################################################################################
 # Обработчик команды /balance_all
@@ -276,14 +398,14 @@ def balance(message):
 @bot.message_handler(commands=['balance_all'])
 def balance_all(message):
   print_message(message)
-  with lock:
-    cursor_user.execute("SELECT * FROM users") # Выполнение запроса
-    users = cursor_user.fetchall() # Получение данных
+  if get_user(message.from_user.id).check_admin() == False: return
+  users = get_users_all()
   #Сортировка по балансу
-  users.sort(key=lambda x: x[3]-x[2], reverse=True)
+  users.sort(key=lambda x: x.balance, reverse=True)
   output = f"{message.from_user.first_name}, вот баланс всех пользователей:\n"
   for i in range(len(users)):
-    output = f"{output}\n{i+1}. @{users[i][1]}: {users[i][3]-users[i][2]} Ничего";
+    user:User = users[i]
+    output = f"{output}\n{i+1}. @{user.username}: {user.balance} Ничего"
   bot.send_message(message.chat.id, output)
   print("SUCCESS: Balance is sent")
   print_user_db()
@@ -298,29 +420,43 @@ def stats(message):
   usernames = message.text.split(' ')
   if len(usernames) == 1:
     username = message.from_user.username
-    with lock:
-      cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,))
-      user = cursor_user.fetchone()
+    user = get_user(username)
     if user is None:
       bot.reply_to(message, f"@{username}: Пользователь не найден!")
       print("ERROR: User is not found")
       return
     else:
-      bot.send_message(message.chat.id, f"{message.from_user.first_name}, твоя статистика:\nБаланс: {user[3]-user[2]} Ничего\n\nПередано: {user[2]} Ничего\nПолучено: {user[3]} Ничего\nВсего транзакций по передаче: {user[4]}\nВсего транзакций по получению: {user[5]}")
+      transactions = user.get_transactions()
+      user_stats = [[0,0],[0,0]]
+      transaction:Transaction
+      for transaction in transactions:
+        if transaction.user_giver.id == user.id:
+          user_stats[0][0] += 1
+          user_stats[0][1] += transaction.amount
+        if transaction.user_taker.id == user.id:
+          user_stats[1][0] += 1
+          user_stats[1][1] += transaction.amount
+      bot.send_message(message.chat.id, f"{message.from_user.first_name}, твоя статистика:\nБаланс: {user.balance} Ничего\n\nПередано: {user_stats[0][1]} Ничего\nПолучено: {user_stats[1][1]} Ничего\nВсего транзакций по передаче: {user_stats[0][0]}\nВсего транзакций по получению: {user_stats[1][0]}")
       print("SUCCESS: Stats are sent")
   else:
     output = f"{message.from_user.first_name}, вот статистика по пользователям:\n"
     for i in range(1, len(usernames)):
-      usernames[i] = usernames[i].replace("@", "")
-      with lock:
-        cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (usernames[i],))
-        user = cursor_user.fetchone()
+      user = get_user(usernames[i].replace("@", ""))
       if user is None:
         bot.reply_to(message, f"{usernames[i]}: Пользователь не найден!")
         print("ERROR: User is not found")
         return
       else:
-        output = f"{output}\n{i}. @{user[1]}\nБаланс: {user[3]-user[2]} Ничего\nПередано: {user[2]} Ничего\nПолучено: {user[3]} Ничего\nВсего транзакций по передаче: {user[4]}\nВсего транзакций по получению: {user[5]}\n";
+        transactions = user.get_transactions()
+        user_stats = [[0,0],[0,0]]
+        for transaction in transactions:
+          if transaction.user_giver.id == user.id:
+            user_stats[0][0] += 1
+            user_stats[0][1] += transaction.amount
+          if transaction.user_taker.id == user.id:
+            user_stats[1][0] += 1
+            user_stats[1][1] += transaction.amount
+        output = f"{output}\n{i}. @{user.username}\nБаланс: {user.balance} Ничего\n\nПередано: {user_stats[0][1]} Ничего\nПолучено: {user_stats[1][1]} Ничего\nВсего транзакций по передаче: {user_stats[0][0]}\nВсего транзакций по получению: {user_stats[1][0]}"
     bot.send_message(message.chat.id, output)
     print("SUCCESS: Stats are sent")
   print_user_db()
@@ -332,14 +468,26 @@ def stats(message):
 @bot.message_handler(commands=['stats_all'])
 def stats_all(message):
   print_message(message)
-  with lock:
-    cursor_user.execute("SELECT * FROM users") # Выполнение запроса
-    users = cursor_user.fetchall() # Получение данных
-  #Сортировка по балансу
-  users.sort(key=lambda x: x[3]-x[2], reverse=True)
+  if get_user(message.from_user.id).check_admin() == False: return
+  users = get_users_all()
+  if users is None:
+    print('ERROR: Empty users database!')
+    return
+  users.sort(key=lambda x: x.balance, reverse=True)
   output = f"{message.from_user.first_name}, вот статистика всех пользователей:\n"
   for i in range(len(users)):
-    output = f"{output}\n{i+1}. @{users[i][1]}:\nБаланс: {users[i][3]-users[i][2]} Ничего\nПередано: {users[i][2]} Ничего\nПолучено: {users[i][3]} Ничего\nВсего транзакций по передаче: {users[i][4]}\nВсего транзакций по получению: {users[i][5]}\n"
+    user:User = users[i]
+    transactions = user.get_transactions()
+    transaction: Transaction
+    user_stats = [[0,0],[0,0]]
+    for transaction in transactions:
+      if transaction.user_giver.id == user.id:
+        user_stats[0][0] += 1
+        user_stats[0][1] += transaction.amount
+      if transaction.user_taker.id == user.id:
+        user_stats[1][0] += 1
+        user_stats[1][1] += transaction.amount
+    output = f"{output}\n{i+1}. @{user.username}:\nБаланс: {user.balance} Ничего\nПередано: {user_stats[0][1]} Ничего\nПолучено: {user_stats[1][1]} Ничего\nВсего транзакций по передаче: {user_stats[0][1]}\nВсего транзакций по получению: {user_stats[1][0]}\n"
   bot.send_message(message.chat.id, output)
   print("SUCCESS: Balance is sent")
   print_user_db()
@@ -352,50 +500,191 @@ def stats_all(message):
 def history(message):
   print_trans_db()
   print_message(message)
-  usernames = message.text.split(' ',1)
-  if len(usernames) == 1:
+  if len(message.text.split(' ',1)) == 1:
     username = message.from_user.username
-    output = f"{message.from_user.first_name}, твоя история транзакций:\n"
-  if len(usernames) > 1:
-    username = usernames[1].replace("@", "")
-    output = f"{message.from_user.first_name}, история транзакций пользователя @{username}:\n"
-  with lock:
-    cursor_user.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,))
-    user = cursor_user.fetchone()
+  else:
+    if get_user(message.from_user.id).check_admin() == False: 
+      bot.send_message(message.chat.id, "Вы можете посмотреть только свою историю! Для этого введите /history без последующих username пользователей.")
+      return
+    username = message.text.split(' ',1)[1].replace("@", "")
+  user = get_user(username)
   if user is None:
     bot.reply_to(message, f"@{username}: Пользователь не найден!")
     print("ERROR: User is not found")
     return
   else:
-    with lock:
-        cursor_tran.execute("SELECT * FROM transactions WHERE user_id_giver = ? OR user_id_taker = ?", (user[0], user[0],))
-        history_list = cursor_tran.fetchall()
-    if len(history_list) == 0:
-      output = f"{message.from_user.first_name}, твоя история транзакций пуста!\n"
+    output = f"{message.from_user.first_name}, история транзакций пользователя @{user.username}:\n"
+    transactions = user.get_transactions()
+    if len(transactions) == 0:
+      output = f"{message.from_user.first_name}, история транзакций пользователя @{username} пуста!\n"
       print("NOTE: empty history")
     else:
-      for j in range (0, min(HISTORY_LENGTH, len(history_list))):
-        k=len(history_list)-1-j
+      for j in range (0, min(HISTORY_LENGTH, len(transactions))):
+        k=len(transactions)-1-j
+        transaction: Transaction = transactions[k]
         print(f"iteration {j}")
-        if user[0] == history_list[k][1]:
-          with lock:
-            cursor_user.execute("SELECT * FROM users WHERE id = ? COLLATE NOCASE", (history_list[k][2],))
-            user_transactor = cursor_user.fetchone()
-          output = f"{output}\n{j+1}. {history_list[k][0]} - Передано {history_list[k][3]} Ничего для @{user_transactor[1]}"
-        elif user[0] == history_list[k][2]:
-          with lock:
-            cursor_user.execute("SELECT * FROM users WHERE id = ? COLLATE NOCASE", (history_list[k][1],))
-            user_transactor = cursor_user.fetchone()
-          output = f"{output}\n{j+1}. {history_list[k][0]} - Получено {history_list[k][3]} Ничего от @{user_transactor[1]}"
+        if user.id == transaction.user_giver.id:
+          output = f"{output}\n{j+1}. {transaction.date} - Передано {transaction.amount} Ничего для @{transaction.user_taker.username}"
+        elif user.id == transaction.user_taker.id:
+          output = f"{output}\n{j+1}. {transaction.date} - Получено {transaction.amount} Ничего от @{transaction.user_giver.username}"
         else:
           print("ERROR: missing user")
-          print(f"{user[0]}, {history_list[k][1]}, {history_list[k][2]}")
+          print(f"{user.id}, {transaction.user_giver}, {transaction.user_taker}")
           output = "Ошибка с обработкой базы данных. Обратитесь к разработчику-дуралею."
           bot.send_message(message.chat.id, output)
           return
     bot.send_message(message.chat.id, output)
-    print("SUCCESS: history is sent")
+  print("SUCCESS: history is sent")
   return
+
+####################################################################################################
+# Обработчик команды /history_all
+
+@bot.message_handler(commands=['history_all'])
+def history_all(message):
+  print_trans_db()
+  print_message(message)
+  if get_user(message.from_user.id).check_admin() == False: return
+  users = get_users_all()
+  if users is None:
+    print('ERROR: Empty users database!')
+    return
+  output = f"{message.from_user.first_name}, последняя история транзакций всех пользователей:\n"
+  transactions = get_transactions_all()
+  if len(transactions) == 0:
+    output = f"{message.from_user.first_name}, история транзакций пуста!\n"
+    print("NOTE: empty history")
+  else:
+    for j in range (0, min(HISTORY_LENGTH, len(transactions))):
+      k=len(transactions)-1-j
+      transaction: Transaction = transactions[k]
+      print(f"iteration {j}")
+      output = f"{output}\n{j+1}. {transaction.date} - @{transaction.user_giver.username} передал {transaction.amount} Ничего для @{transaction.user_taker.username}"
+  bot.send_message(message.chat.id, output)
+  print("SUCCESS: history is sent")
+  return
+
+####################################################################################################
+# Обработчик команды /balance_add
+
+@bot.message_handler(commands=['balance_add'])
+def balance_add(message):
+  print_message(message)
+  admin: User = get_user(message.from_user.id)
+  if get_user(admin.id).check_admin() == False: return
+  print("BALANCE_ADD: step 1")
+  transaction = Transaction(user_giver = user_bot)
+  #Команда с двумя аргументами
+  #if len(message.text.split(' ')) == 3:
+  #  print("Is3")
+  #  tr_data.amount = message.text.split(' ', 2)[1]
+  #  if check_amount(tr_data.amount, message) == False: return
+  #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
+  #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
+  #  with lock:
+  #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
+  #    tr_data.user_taker = cursor.fetchone()
+  #  print("SUCCESS: Command is valid")
+  #  #Отправка Ничего
+  #  transaction(tr_data, message)
+  #  return
+  #else:
+  print("BALANCE_ADD: Separate commands")
+  msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши Username пользователя, которому Биржа начислит Ничего")
+  bot.register_next_step_handler(msg, balance_add_step_taker, transaction, admin)
+
+def balance_add_step_taker(message, transaction:Transaction, admin:User):
+  print_message(message)
+  if message.from_user.id != admin.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
+    return
+  print("BALANCE_ADD: step 2")
+  transaction.user_taker = get_user(message.text.replace("@", ""))
+  print(transaction)
+  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
+  msg = bot.reply_to(message, "Напишите количество Ничего, которое Биржа начислит пользователю")
+  bot.register_next_step_handler(msg, balance_add_step_amount, transaction, admin)
+
+def balance_add_step_amount(message, transaction:Transaction, admin:User):
+  print_message(message)
+  if message.from_user.id != admin.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
+    return
+  print("BALANCE_ADD: step 3")
+  transaction.amount = int(message.text)
+  if check_amount_admin(transaction.amount, message) == False: return
+  transaction.user_giver.balance += transaction.amount
+  if transaction.check_transaction(message) == False: 
+    transaction.user_giver.balance -= transaction.amount
+    return
+  with lock:
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (transaction.amount, transaction.user_giver.id))
+    database.commit()
+  print("SUCCESS: Command is valid")
+  transaction.transaction(message)
+
+####################################################################################################
+# Обработчик команды /balance_set
+
+@bot.message_handler(commands=['balance_set'])
+def balance_set(message):
+  print_message(message)
+  admin: User = get_user(message.from_user.id)
+  if get_user(admin.id).check_admin() == False: return
+  print("BALANCE_SET: step 1")
+  transaction = Transaction(user_giver = user_bot)
+  #Команда с двумя аргументами
+  #if len(message.text.split(' ')) == 3:
+  #  print("Is3")
+  #  tr_data.amount = message.text.split(' ', 2)[1]
+  #  if check_amount(tr_data.amount, message) == False: return
+  #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
+  #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
+  #  with lock:
+  #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
+  #    tr_data.user_taker = cursor.fetchone()
+  #  print("SUCCESS: Command is valid")
+  #  #Отправка Ничего
+  #  transaction(tr_data, message)
+  #  return
+  #else:
+  print("BALANCE_ADD: Separate commands")
+  msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши Username пользователя, которому Биржа установит количество Ничего")
+  bot.register_next_step_handler(msg, balance_set_step_taker, transaction, admin)
+
+def balance_set_step_taker(message, transaction:Transaction, admin:User):
+  print_message(message)
+  if message.from_user.id != admin.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
+    return
+  print("BALANCE_ADD: step 2")
+  transaction.user_taker = get_user(message.text.replace("@", ""))
+  print(transaction)
+  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
+  msg = bot.reply_to(message, "Напишите количество Ничего, которое Биржа начислит пользователю")
+  bot.register_next_step_handler(msg, balance_set_step_amount, transaction, admin)
+
+def balance_set_step_amount(message, transaction:Transaction, admin:User):
+  print_message(message)
+  if message.from_user.id != admin.id:
+    print('ERROR: Sequence broken by different user!')
+    bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
+    return
+  print("BALANCE_ADD: step 3")
+  transaction.amount = int(message.text) - transaction.user_taker.balance
+  if check_amount_admin(transaction.amount, message) == False: return
+  transaction.user_giver.balance += transaction.amount
+  if transaction.check_transaction(message) == False: 
+    transaction.user_giver.balance -= transaction.amount
+    return
+  with lock:
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (transaction.amount, transaction.user_giver.id))
+    database.commit()
+  print("SUCCESS: Command is valid")
+  transaction.transaction(message)
 
 ####################################################################################################
 #запуск бота
