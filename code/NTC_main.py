@@ -1,10 +1,11 @@
 # Импорты
 import os
+import sys
+import telebot
 from telebot.types import TransactionPartner
 #from background import keep_alive #импорт функции для поддержки работоспособности
 import pip
 pip.main(['install', 'pytelegrambotapi'])
-import telebot
 import time
 import sqlite3
 import threading
@@ -28,24 +29,34 @@ ADMIN_LIST = { # Список людей, которые могут исполь
 
 ####################################################################################################
 #Выбор режима работы (тест/релиз)
-if input("Hello! Is this a test or release?\n(Input 'R' if this is the release version)") == "R":
-  BOT_TOKEN = BOT_RELEASE_TOKEN
-  print("WARNING: RUNNING THE RELEASE MODE!")
-else:
+print("Hello! Checking the system parameter for work mode\n")
+print(sys.argv)
+try:
+  if sys.argv[1] == 'RELEASE':
+    BOT_TOKEN = BOT_RELEASE_TOKEN
+    print("WARNING: RUNNING THE RELEASE MODE!")
+    database_name = 'ntc_database.db'
+  else:
+    BOT_TOKEN = BOT_TEST_TOKEN
+    print("SUCCESS: running the TESTING mode")
+    database_name = 'ntc_database_test.db'
+except IndexError:
   BOT_TOKEN = BOT_TEST_TOKEN
   print("SUCCESS: running the TESTING mode")
+  database_name = 'ntc_database_test.db'
 
+####################################################################################################
 # Создание бота
 bot = telebot.TeleBot(BOT_TOKEN)
 print(f'SUCCESS: Bot created!')
 # Подключение к базе данных пользователей SQLite
 SCRIPT_PATH = f'{os.path.dirname(os.path.abspath(__file__))}'
-if not os.path.exists(f"{SCRIPT_PATH}/ntc_database.db"):
-    open(f"{SCRIPT_PATH}/ntc_database.db", "w")
+if not os.path.exists(f"{SCRIPT_PATH}/{database_name}"):
+    open(f"{SCRIPT_PATH}/{database_name}", "w")
     print("SUCCESS: New database file is created!")
 else:
     print("SUCCESS: Database file is found!")
-database = sqlite3.connect(f"{SCRIPT_PATH}/ntc_database.db", check_same_thread=False)
+database = sqlite3.connect(f"{SCRIPT_PATH}/{database_name}", check_same_thread=False)
 cursor = database.cursor()
 # Создание БД пользователей, если она не существует
 cursor.execute('''CREATE TABLE IF NOT EXISTS 
@@ -309,14 +320,18 @@ def start(message):
   # Добавьте пользователя в базу данных, если его еще нет
   if check_user(message.from_user.id) is False:
     user = User(message.from_user.id, message.from_user.username, random.randint(NOTHING_DEFAULT_MIN, NOTHING_DEFAULT__MAX))
+    if user.check_admin() == True: secret_commands_doc = f'\n{message.from_user.first_name}, ты админ! Тебе доступны следующие секретные команды:\n1. /balance_add - добавить несколько Ничего на счет пользователя (в том числе и отрицательное количество).\n2. /balance_set - установить баланс пользователя.\n3. /balance_all - Список всех пользователей с их балансами.\n4. /stats_all - Статистика по всем пользователям.\n'
+    else: secret_commands_doc = ''
     cursor.execute("INSERT INTO users (id, username, balance) VALUES (?, ?, ?)", (user.id, user.username, user.balance))
     database.commit()
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give- передать несколько Ничего пользователю\n2. /balance - проверить свой текущий баланс\n3. /history - посмотреть историю транзакций\n4./stats - посмотреть cвою статистику по транзакциям\n\nТвой начальный баланс: {user.balance} Ничего.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
-    print("SUCCESS: User is registered")
+    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nЯ бот для обмена ничем. Вот как мной пользоваться:\n1. /give - передать несколько Ничего пользователю.\n2. /balance - проверить свой текущий баланс.\n3. /history - посмотреть историю транзакций.\n4. /stats - посмотреть cвою статистику по транзакциям.\n{secret_commands_doc}\nТвой начальный баланс: {user.balance} Ничего.\nПомни, что Ничего - это довольно ценная валюта, так что передавай её с умом!\n\nУдачи!")
+    print("SUCCESS: User is registered, balance and commands are sent")
   else:
     user = get_user(message.from_user.id)
-    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nТы уже зарегистрирован на бирже Ничего!\n\nТвой баланс: {user.balance} Ничего")
-    print("SUCCESS: User is already registered, balance is sent")
+    if user.check_admin() == True: secret_commands_doc = f'\n{message.from_user.first_name}, ты админ! Тебе доступны следующие секретные команды:\n1. /balance_add - добавить несколько Ничего на счет пользователя (в том числе и отрицательное количество).\n2. /balance_set - установить баланс пользователя.\n3. /balance_all - Список всех пользователей с их балансами.\n4. /stats_all - Статистика по всем пользователям.\n'
+    else: secret_commands_doc = ''
+    bot.reply_to(message, f"Привет, {message.from_user.first_name}!\nТы уже зарегистрирован на бирже Ничего!\n\nТвой баланс: {user.balance} Ничего\n\nКоманды:\n1. /give - передать несколько Ничего пользователю.\n2. /balance - проверить свой текущий баланс.\n3. /history - посмотреть историю транзакций.\n4. /stats - посмотреть cвою статистику по транзакциям.\n{secret_commands_doc}")
+    print("SUCCESS: User is already registered, balance and commands are sent")
   print_user_db()
   return
 
@@ -345,7 +360,7 @@ def give(message):
   #  return
   #else:
   print("GIVE: Separate commands")
-  msg = bot.reply_to(message, "Напишите Username пользователя, которому хотите передать Ничего")
+  msg = bot.reply_to(message, "Напишите в ответ на это сообщение Username пользователя, которому хотите передать Ничего.")
   bot.register_next_step_handler(msg, give_step_taker, transaction)
 
 def give_step_taker(message, transaction:Transaction):
@@ -358,7 +373,7 @@ def give_step_taker(message, transaction:Transaction):
   transaction.user_taker = get_user(message.text.replace("@", ""))
   print(transaction)
   if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
-  msg = bot.reply_to(message, "Напишите количество Ничего, которое хотите передать")
+  msg = bot.reply_to(message, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
   bot.register_next_step_handler(msg, give_step_amount, transaction)
 
 def give_step_amount(message, transaction:Transaction):
@@ -385,9 +400,12 @@ def balance(message):
   if len(usernames) == 1:
     user = get_user(message.from_user.username)
     if check_sender(user, message) == False: return
-    bot.send_message(message.chat.id, f"{message.from_user.first_name}, твой баланс: {user.balance} Ничего")
+    bot.send_message(message.chat.id, f"{message.from_user.first_name}, твой баланс: {user.balance} Ничего.")
     print("SUCCESS: Balance is sent")
   else:
+    if get_user(message.from_user.id).check_admin() == False: 
+      bot.send_message(message.chat.id, "Вы можете узнать только свой баланс! Для этого введите /balance без последующих username пользователей.")
+      return
     output = f"{message.from_user.first_name}, балансы запрашиваемых пользователей:\n"
     for i in range(1, len(usernames)):
       user = get_user(usernames[i].replace("@", ""))
@@ -395,7 +413,7 @@ def balance(message):
         bot.reply_to(message, f"{usernames[i]}: Пользователь не найден!")
         return
       else:
-        output = f"{output}\nБаланс пользователя @{user.username}: {user.balance} Ничего\n"
+        output = f"{output}\nБаланс пользователя @{user.username}: {user.balance} Ничего.\n"
       bot.send_message(message.chat.id, output)
       print("SUCCESS: Balance is sent")
   print_user_db()
@@ -414,7 +432,7 @@ def balance_all(message):
   output = f"{message.from_user.first_name}, вот баланс всех пользователей:\n"
   for i in range(len(users)):
     user:User = users[i]
-    output = f"{output}\n{i+1}. @{user.username}: {user.balance} Ничего"
+    output = f"{output}\n{i+1}. @{user.username}: {user.balance} Ничего."
   bot.send_message(message.chat.id, output)
   print("SUCCESS: Balance is sent")
   print_user_db()
@@ -448,6 +466,9 @@ def stats(message):
       bot.send_message(message.chat.id, f"{message.from_user.first_name}, твоя статистика:\nБаланс: {user.balance} Ничего\n\nПередано: {user_stats[0][1]} Ничего\nПолучено: {user_stats[1][1]} Ничего\nВсего транзакций по передаче: {user_stats[0][0]}\nВсего транзакций по получению: {user_stats[1][0]}")
       print("SUCCESS: Stats are sent")
   else:
+    if get_user(message.from_user.id).check_admin() == False: 
+      bot.send_message(message.chat.id, "Вы можете посмотреть только свою статистику! Для этого введите /stats без последующих username пользователей.")
+      return
     output = f"{message.from_user.first_name}, вот статистика по пользователям:\n"
     for i in range(1, len(usernames)):
       user = get_user(usernames[i].replace("@", ""))
@@ -522,13 +543,14 @@ def history(message):
     print("ERROR: User is not found")
     return
   else:
-    output = f"{message.from_user.first_name}, история транзакций пользователя @{user.username}:\n"
+    output = ""
     transactions = user.get_transactions()
-    if len(transactions) == 0:
+    output_length = min(HISTORY_LENGTH, len(transactions))
+    if output_length == 0:
       output = f"{message.from_user.first_name}, история транзакций пользователя @{username} пуста!\n"
       print("NOTE: empty history")
     else:
-      for j in range (0, min(HISTORY_LENGTH, len(transactions))):
+      for j in range (0, output_length):
         k=len(transactions)-1-j
         transaction: Transaction = transactions[k]
         print(f"iteration {j}")
@@ -542,6 +564,10 @@ def history(message):
           output = "Ошибка с обработкой базы данных. Обратитесь к разработчику-дуралею."
           bot.send_message(message.chat.id, output)
           return
+    if output_length < HISTORY_LENGTH:
+      output = f"{message.from_user.first_name}, история последних {HISTORY_LENGTH} транзакций пользователя @{user.username}:\n{output}"
+    else:
+      output = f"{message.from_user.first_name}, история всех транзакций пользователя @{user.username}:\n{output}"
     bot.send_message(message.chat.id, output)
   print("SUCCESS: history is sent")
   return
@@ -558,7 +584,7 @@ def history_all(message):
   if users is None:
     print('ERROR: Empty users database!')
     return
-  output = f"{message.from_user.first_name}, последняя история транзакций всех пользователей:\n"
+  output = f"{message.from_user.first_name}, история последних {HISTORY_LENGTH} транзакций всех пользователей:\n"
   transactions = get_transactions_all()
   if len(transactions) == 0:
     output = f"{message.from_user.first_name}, история транзакций пуста!\n"
@@ -660,7 +686,7 @@ def balance_set(message):
   #  return
   #else:
   print("BALANCE_ADD: Separate commands")
-  msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши Username пользователя, которому Биржа установит количество Ничего")
+  msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши в ответ на это сообщение Username пользователя, которому Биржа установит количество Ничего")
   bot.register_next_step_handler(msg, balance_set_step_taker, transaction, admin)
 
 def balance_set_step_taker(message, transaction:Transaction, admin:User):
@@ -673,7 +699,7 @@ def balance_set_step_taker(message, transaction:Transaction, admin:User):
   transaction.user_taker = get_user(message.text.replace("@", ""))
   print(transaction)
   if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
-  msg = bot.reply_to(message, "Напишите количество Ничего, которое Биржа начислит пользователю")
+  msg = bot.reply_to(message, "Напиши в ответ на это сообщение количество Ничего, которое Биржа установит пользователю")
   bot.register_next_step_handler(msg, balance_set_step_amount, transaction, admin)
 
 def balance_set_step_amount(message, transaction:Transaction, admin:User):
