@@ -1,6 +1,7 @@
 # Импорты
 import os
 import sys
+import json
 import telebot
 from telebot.types import TransactionPartner
 #from background import keep_alive #импорт функции для поддержки работоспособности
@@ -13,19 +14,23 @@ import datetime
 import random
 lock = threading.Lock()
 
+SCRIPT_PATH = f'{os.path.dirname(os.path.abspath(__file__))}'
+
+#Получение данных из json
+with open(f'{SCRIPT_PATH}/const.json', 'r', encoding='utf-8') as file:
+  constants = json.load(file)
+with open(f'{SCRIPT_PATH}/tokens.json', 'r', encoding='utf-8') as file:
+  tokens = json.load(file)
+with open(f'{SCRIPT_PATH}/admins.json', 'r', encoding='utf-8') as file:
+  ADMIN_LIST = json.load(file)['admin_usernames']
+
 #Константы
-BOT_TEST_TOKEN = '7708186142:AAG5FTQmYFS14FyRHdXXYF-BphHKk5op0_U' # Токен тестовой версии бота
-BOT_RELEASE_TOKEN = '7662176920:AAGsNltswUDwT_d4Ha_IjA2neQYnpIhYx48' # Токен релизной версии бота
-TRANSACTION_LIMIT = 10 # Максимальное количество Ничего в транзакции
-HISTORY_LENGTH = 10 # Максимальная длина вывода статистики
-NOTHING_DEFAULT_MIN = 5 # Минимальное количество получаемых Ничего по умолчанию
-NOTHING_DEFAULT__MAX = 15 # Максимальное количество получаемых Ничего по умолчанию
-NOTHING_LOW_LIMIT = 0 # Минимальное количество Ничего у пользователя
-NOTHING_HIGH_LIMIT = None # Максимальное колтчество Ничего у пользователя
-ADMIN_LIST = { # Список людей, которые могут использовать админские функции
-  'eugenius_lesh',
-  'grechka37'
-}
+TRANSACTION_LIMIT = constants['TRANSACTION_LIMIT'] # Максимальное количество Ничего в транзакции
+HISTORY_LENGTH = constants['HISTORY_LENGTH'] # Максимальная длина вывода статистики
+NOTHING_DEFAULT_MIN = constants['NOTHING_DEFAULT_MIN'] # Минимальное количество получаемых Ничего по умолчанию
+NOTHING_DEFAULT__MAX = constants['NOTHING_DEFAULT__MAX'] # Максимальное количество получаемых Ничего по умолчанию
+NOTHING_LOW_LIMIT = constants['NOTHING_LOW_LIMIT'] # Минимальное количество Ничего у пользователя
+NOTHING_HIGH_LIMIT = constants['NOTHING_HIGH_LIMIT'] # Максимальное колтчество Ничего у пользователя
 
 ####################################################################################################
 #Выбор режима работы (тест/релиз)
@@ -33,15 +38,15 @@ print("Hello! Checking the system parameter for work mode\n")
 print(sys.argv)
 try:
   if sys.argv[1] == 'RELEASE':
-    BOT_TOKEN = BOT_RELEASE_TOKEN
+    BOT_TOKEN = tokens['BOT_RELEASE_TOKEN']
     print("WARNING: RUNNING THE RELEASE MODE!")
     database_name = 'ntc_database.db'
   else:
-    BOT_TOKEN = BOT_TEST_TOKEN
+    BOT_TOKEN = tokens['BOT_TEST_TOKEN']
     print("SUCCESS: running the TESTING mode")
     database_name = 'ntc_database_test.db'
 except IndexError:
-  BOT_TOKEN = BOT_TEST_TOKEN
+  BOT_TOKEN = tokens['BOT_TEST_TOKEN']
   print("SUCCESS: running the TESTING mode")
   database_name = 'ntc_database_test.db'
 
@@ -50,7 +55,6 @@ except IndexError:
 bot = telebot.TeleBot(BOT_TOKEN)
 print(f'SUCCESS: Bot created!')
 # Подключение к базе данных пользователей SQLite
-SCRIPT_PATH = f'{os.path.dirname(os.path.abspath(__file__))}'
 if not os.path.exists(f"{SCRIPT_PATH}/{database_name}"):
     open(f"{SCRIPT_PATH}/{database_name}", "w")
     print("SUCCESS: New database file is created!")
