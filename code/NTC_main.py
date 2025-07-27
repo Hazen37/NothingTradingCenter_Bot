@@ -28,9 +28,14 @@ with open(f'{SCRIPT_PATH}/admins.json', 'r', encoding='utf-8') as file:
 TRANSACTION_LIMIT = constants['TRANSACTION_LIMIT'] # Максимальное количество Ничего в транзакции
 HISTORY_LENGTH = constants['HISTORY_LENGTH'] # Максимальная длина вывода статистики
 NOTHING_DEFAULT_MIN = constants['NOTHING_DEFAULT_MIN'] # Минимальное количество получаемых Ничего по умолчанию
-NOTHING_DEFAULT__MAX = constants['NOTHING_DEFAULT__MAX'] # Максимальное количество получаемых Ничего по умолчанию
+NOTHING_DEFAULT_MAX = constants['NOTHING_DEFAULT_MAX'] # Максимальное количество получаемых Ничего по умолчанию
 NOTHING_LOW_LIMIT = constants['NOTHING_LOW_LIMIT'] # Минимальное количество Ничего у пользователя
-NOTHING_HIGH_LIMIT = constants['NOTHING_HIGH_LIMIT'] # Максимальное колтчество Ничего у пользователя
+NOTHING_HIGH_LIMIT = constants['NOTHING_HIGH_LIMIT'] # Максимальное количество Ничего у пользователя
+KEYBOARD_GIVE_USER_MAXLEN = constants['KEYBOARD_GIVE_USER_MAXLEN'] # Максимальное количество пользователей в команде /give
+KEYBOARD_GIVE_USER_WIDTH = constants['KEYBOARD_GIVE_USER_WIDTH'] # Ширина клавиатуры при выборе пользователя в /give
+KEYBOARD_GIVE_NOTHING_MIN = constants['KEYBOARD_GIVE_NOTHING_MIN'] # Минимальное количество Ничего в /give
+KEYBOARD_GIVE_NOTHING_MAX = constants['KEYBOARD_GIVE_NOTHING_MAX'] # Максимальное количество Ничего в /give
+KEYBOARD_GIVE_NOTHING_WIDTH = constants['KEYBOARD_GIVE_NOTHING_WIDTH'] # Ширина клавиатуры при выборе количества ничего в /give
 
 ####################################################################################################
 #Выбор режима работы (тест/релиз)
@@ -148,7 +153,7 @@ class Transaction:
     self.amount = amount
     self.date = date 
   #Метод осуществления передачи
-  def transaction(self, message):
+  def transaction(self, chat_id):
     self.date: str = datetime.datetime.now(tz=datetime.timezone(datetime.timedelta(hours=3))).strftime("%d.%m.%Y %H:%M:%S")
     with lock:
       cursor.execute("UPDATE users SET balance = balance - ? WHERE id = ?", (self.amount, self.user_giver.id))
@@ -161,11 +166,11 @@ class Transaction:
       database.commit()
     print("SUCCESS: Nothing is given")
     if self.user_giver.id != user_bot.id:
-      bot.send_message(message.chat.id, f"@{self.user_giver.username} передал @{self.user_taker.username} {self.amount} Ничего!")
+      bot.send_message(chat_id, f"@{self.user_giver.username} передал @{self.user_taker.username} {self.amount} Ничего!")
     else:
-      bot.send_message(message.chat.id, f"Биржа начислила @{self.user_taker.username} {self.amount} Ничего!")
+      bot.send_message(chat_id, f"Биржа начислила @{self.user_taker.username} {self.amount} Ничего!")
     try:
-      member = bot.get_chat_member(chat_id=message.chat.id, user_id=self.user_taker.id)
+      member = bot.get_chat_member(chat_id=chat_id, user_id=self.user_taker.id)
       print("chatmember")
     except telebot.apihelper.ApiException as e:
       if self.user_giver.id != user_bot.id:
@@ -175,24 +180,24 @@ class Transaction:
       print("notachatmember")
       print_user_db()
   # Проверка транзакции
-  def check_transaction(self, message):
+  def check_transaction(self, chat_id):
     if NOTHING_HIGH_LIMIT is not None:
       if NOTHING_HIGH_LIMIT < self.user_taker.balance + self.amount:
         print("ERROR: Taker balance overflow")
-        bot.reply_to(message, f"У получателя @{self.user_taker.username} станет слишком много ничего!\nПопробуйте отправить поменьше.")
+        bot.send_message(chat_id, f"У получателя @{self.user_taker.username} станет слишком много ничего!\nПопробуйте отправить поменьше.")
         return(False)
       if NOTHING_HIGH_LIMIT < self.user_giver.balance - self.amount:
         print("ERROR: Giver balance overflow")
-        bot.reply_to(message, f"У отправителя @{self.user_giver.username} станет слишком много ничего!\nПопробуйте отправить побольше.")
+        bot.send_message(chat_id, f"У отправителя @{self.user_giver.username} станет слишком много ничего!\nПопробуйте отправить побольше.")
         return(False)
     if NOTHING_LOW_LIMIT is not None:
       if NOTHING_LOW_LIMIT > self.user_giver.balance - self.amount:
         print("ERROR: Giver balance underflow")
-        bot.reply_to(message, f"{message.from_user.first_name}, у тебя нет столько ничего! Твой баланс {self.user_giver.balance} Ничего.\nПопроси у кого-нибудь еще!")
+        bot.send_message(chat_id, f"У тебя нет столько ничего! Твой баланс {self.user_giver.balance} Ничего.\nПопроси у кого-нибудь еще!")
         return(False)
       if NOTHING_LOW_LIMIT > self.user_taker.balance + self.amount:
         print("ERROR: Taker balance underflow")
-        bot.reply_to(message, f"{message.from_user.first_name}, у пользователя @{self.user_taker.username} станет слишком мало ничего!\nЕго баланс сейчас: {self.user_taker.balance} Ничего.")
+        bot.send_message(chat_id, f"У пользователя @{self.user_taker.username} станет слишком мало ничего!\nЕго баланс сейчас: {self.user_taker.balance} Ничего.")
         return(False)
     return(True)
 
@@ -229,7 +234,7 @@ def print_trans_db():
     print(row)
   print("\n")
 
-def print_message(message):
+def print_message(message:telebot.types.Message):
    print(f'\n{message.from_user.username} says: {message.text}')
    
 #####################################################################################################
@@ -247,61 +252,65 @@ def check_user(user_data):
     return(True)
 
 #Проверка на количество Ничего
-def check_amount(amount, message):
+def check_amount(amount, chat_id):
   try:
     amount = int(amount)
   except ValueError:
     print("ERROR: Invalid amount")
-    bot.reply_to(message, "Неверное количество Ничего!")
+    bot.send_message(chat_id, "Неверное количество Ничего!")
     return(False)
   #Проверка на нулевую передачу Ничего
   if amount == 0  :
     print("ERROR: Zero transaction")
-    bot.reply_to(message, "Ха-ха, у нас тут Клоун. Вы не можете передать 0 Ничего!")
+    bot.send_message(chat_id, "Ха-ха, у нас тут Клоун. Вы не можете передать 0 Ничего!")
     return(False)
   #Проверка на отрицательную передачу Ничего
   if amount < 0  :
     print("ERROR: Negative transaction")
-    bot.reply_to(message, "Ого, да Вы умны! Но к сожалению, Вы не можете передать отрицательное количество Ничего!")
+    bot.send_message(chat_id, "Ого, да Вы умны! Но к сожалению, Вы не можете передать отрицательное количество Ничего!")
     return(False)
   #Проверка на большое количество Ничего
   if amount > TRANSACTION_LIMIT:
     print("ERROR: Large transaction")
-    bot.reply_to(message, f"Вы не можете передать больше {TRANSACTION_LIMIT} Ничего! Это Вам не деньги, чтобы их так тратить!")
+    bot.send_message(chat_id, f"Вы не можете передать больше {TRANSACTION_LIMIT} Ничего! Это Вам не деньги, чтобы их так тратить!")
     return(False)
   return(True)
 
-def check_amount_admin(amount, message):
+def check_amount_admin(amount, chat_id):
   try:
     amount = int(amount)
   except ValueError:
     print("ERROR: Invalid amount")
-    bot.reply_to(message, "Неверное количество Ничего!")
+    bot.send_message(chat_id, "Неверное количество Ничего!")
     return(False)
   return(True)
 
 #Проверка получающего
-def check_taker(user_taker:User,user_giver:User, message):
+def check_taker(user_taker:User,user_giver:User, chat_id):
   if user_taker is None:
     print("ERROR: Taker is not found")
-    bot.reply_to(message, f"{message.text}: Пользователь не найден!")
+    bot.send_message(chat_id, f"Получатель не найден!")
     return(False)
     #Проверка на отправление себе
   if user_giver.id == user_taker.id:
       print("ERROR: Giver is taker")
-      bot.reply_to(message, "Ха-ха, очень смешно. Вы не можете отправить самому себе Ничего!")
+      bot.send_message(chat_id, "Ха-ха, очень смешно. Вы не можете отправить самому себе Ничего!")
       return(False)
   if user_taker.id == user_bot.id:
       print("ERROR: Taker is bot")
-      bot.reply_to(message, "Увы, Вы не можете передать Ничего боту! Почему Вы вообще попробовали это сделать?")
+      bot.send_message(chat_id, "Увы, Вы не можете передать Ничего боту! Почему Вы вообще попробовали это сделать?")
       return(False)
   return(True)
 
 #Проверка отправляющего сообщение
-def check_sender(user_giver:User, message):
+def check_sender(user_giver:User, chat_id):
   if user_giver is None:
     print("ERROR: Giver is not found")
-    bot.reply_to(message, "Вы не зарегистрированы на бирже Ничего!\nЗарегистрируйтесь, чтобы начать обмениваться Ничем.")
+    bot.send_message(chat_id, "Вы не зарегистрированы на бирже Ничего!\nЗарегистрируйтесь, чтобы начать обмениваться Ничем.")
+    return(False)
+  if user_giver.balance == NOTHING_LOW_LIMIT:
+    print("ERROR: No nothing")
+    bot.send_message(chat_id, "У вас закончилось ничего! Чтобы отдать ничего, сначала надо получить ничего.\nПопросите у кого-нибудь.")
     return(False)
   return(True)
 
@@ -314,16 +323,205 @@ if check_user(user_bot.id) == False:
     database.commit()
     print(f'SUCCESS: Bot user is added!')
 
-####################################################################################################
-####################################################################################################
-# Обработчик команды /start
+###################################################################################################
+##                                      ГРАФИЧЕСКИЕ КОМАНДЫ                                      ##
+###################################################################################################
+user_selected = {}
+# Словарь, где ключ — ID пользователя (чат), а значение — множество выбранных им чисел.
+transactions_new = {}
+# Словарь, где ключ — ID пользователя (чат), а значение — новая транзакция этого пользователя.
+admin_transactions_new = {}
 
+def keyboard_give_user(user_id, user_list, command):
+  markup = telebot.types.InlineKeyboardMarkup(row_width=KEYBOARD_GIVE_USER_WIDTH )
+  # selected = user_selected.get(user_id, None)
+  buttons = []
+  for userlist_id in user_list:
+    user = get_user(userlist_id)
+    buttons.append(telebot.types.InlineKeyboardButton(text=f"@{user.username}", callback_data=f"{user_id}_NTC_{command}_user_@{user.username}"))
+    if len(buttons) == KEYBOARD_GIVE_USER_MAXLEN: break
+  # Разбиваем кнопки по рядам
+  rows = []
+  total_buttons = len(buttons)
+  for start in range(0, total_buttons, KEYBOARD_GIVE_USER_WIDTH ):
+    row_buttons = buttons[start:start + KEYBOARD_GIVE_USER_WIDTH ]
+    # Если последний ряд короче ширины — добавляем пустые кнопки в конец
+    if len(row_buttons) < KEYBOARD_GIVE_USER_MAXLEN:
+      empty_count = 0 # KEYBOARD_GIVE_USER_WIDTH - len(row_buttons)
+      for _ in range(empty_count):
+        # Пустая кнопка — текст пробел, callback_data="ignore"
+        row_buttons.append(telebot.types.InlineKeyboardButton(text=" ", callback_data=f"{user_id}_NTC_ignore"))
+    rows.append(row_buttons)
+  # Добавляем все ряды в markup
+  for row_buttons in rows:
+      markup.row(*row_buttons)
+  # Кнопка "Другой пользователь" в отдельном ряду
+  markup.add(telebot.types.InlineKeyboardButton(text="Другой пользователь", callback_data=f"{user_id}_NTC_{command}_user_other"))
+  return markup
+
+def keyboard_give_amount(user_id, command):
+  user = get_user(user_id)
+  markup = telebot.types.InlineKeyboardMarkup(row_width=KEYBOARD_GIVE_NOTHING_WIDTH )
+  # selected = user_selected.get(user_id, None)
+  buttons = []
+  max_amount = min(KEYBOARD_GIVE_NOTHING_MAX, user.balance, TRANSACTION_LIMIT)
+  for i in range(KEYBOARD_GIVE_NOTHING_MIN, max_amount + 1):
+    buttons.append(telebot.types.InlineKeyboardButton(text=f"{i}", callback_data=f"{user_id}_NTC_{command}_amount_{i}"))
+  # Разбиваем кнопки по рядам
+  rows = []
+  total_buttons = len(buttons)
+  for start in range(0, total_buttons, KEYBOARD_GIVE_NOTHING_WIDTH ):
+    row_buttons = buttons[start:start + KEYBOARD_GIVE_NOTHING_WIDTH ]
+    # Если последний ряд короче ширины — добавляем пустые кнопки в конец
+    if len(row_buttons) < min(max_amount, user.balance):
+      empty_count = KEYBOARD_GIVE_NOTHING_WIDTH - len(row_buttons)
+      for _ in range(empty_count):
+        # Пустая кнопка — текст пробел, callback_data="ignore"
+        row_buttons.append(telebot.types.InlineKeyboardButton(text=" ", callback_data=f"{user_id}_NTC_ignore"))
+    rows.append(row_buttons)
+  # Добавляем все ряды в markup
+  for row_buttons in rows:
+      markup.row(*row_buttons)
+  # Кнопка "Другое количество" в отдельном ряду
+  markup.add(telebot.types.InlineKeyboardButton(text="Другое количество", callback_data=f"{user_id}_NTC_{command}_amount_other"))
+  return markup
+
+###################################################################################################
+##                                       ОБРАБОТКА КОЛБЕКОВ                                      ##
+###################################################################################################
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call: telebot.types.CallbackQuery):
+  # Берем id пользователя из чата для запоминания его выбора
+  chat_id = call.message.chat.id
+  user_id = call.from_user.id
+  user_sender = get_user(user_id)
+  if user_id not in user_selected:
+    user_selected[user_id] = None
+  if not call.data.startswith(str(user_id)):
+    bot.answer_callback_query(call.id, "Эта кнопка не для вас!", show_alert=True)
+    return
+  # Игнорируем нажатия по пустым кнопкам
+  if call.data == f"{user_id}_NTC_ignore":
+    bot.answer_callback_query(call.id)
+  # Команда /give, блок user 
+  elif call.data.startswith(f"{user_id}_NTC_give_user"):
+    bot.edit_message_reply_markup(
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      reply_markup=None
+      )
+    print("GIVE: step 2")
+    if user_id not in transactions_new:
+      print("ERROR: Missing the beginning of a transaction")
+      bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+      return
+    else:
+      transaction = transactions_new[user_id]
+    if call.data == f"{user_id}_NTC_give_user_other":
+      msg = bot.send_message(chat_id, f"@{user_sender.username}, напишите в ответ на это сообщение Username пользователя, которому Вы хотите передать Ничего.")
+      bot.register_next_step_handler(msg, give_step_taker)
+      return
+    else:
+      transaction.user_taker = get_user(call.data.split("_", 4)[4][1:])
+      transactions_new[user_id] = transaction
+      bot.send_message(chat_id, f"Выберите количество ничего, которое Вы хотите отправить пользователю @{transaction.user_taker.username}:", reply_markup=keyboard_give_amount(user_id, 'give'))
+      return
+  # Команда /give, блок amount
+  elif call.data.startswith(f"{user_id}_NTC_give_amount"):
+    bot.edit_message_reply_markup(
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      reply_markup=None
+    )
+    print("GIVE: step 3")
+    if user_id not in transactions_new:
+      print("ERROR: Missing the beginning of a transaction")
+      bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+      return
+    else:
+      transaction : Transaction = transactions_new[user_id]
+    if call.data == f"{user_id}_NTC_give_amount_other":
+      msg = bot.send_message(chat_id, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
+      bot.register_next_step_handler(msg, give_step_amount)
+      return
+    else:
+      transaction.amount = int(call.data.split("_", 4)[4])
+      if check_amount(transaction.amount, chat_id) == False: return
+      if transaction.check_transaction(chat_id) == False: return
+      print("SUCCESS: Command is valid")
+      transaction.transaction(chat_id)
+      del transactions_new[user_id]
+      return
+  # Команда /balance_add, блок user 
+  elif call.data.startswith(f"{user_id}_NTC_balanceadd_user"):
+    if get_user(user_id).check_admin() == False: return 
+    bot.edit_message_reply_markup(
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      reply_markup=None
+      )
+    print("BALANCE_ADD: step 2")
+    if user_id not in admin_transactions_new:
+      print("ERROR: Missing the beginning of a transaction")
+      bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+      return
+    else:
+      transaction = admin_transactions_new[user_id]
+    if call.data == f"{user_id}_NTC_balanceadd_user_other":
+      msg = bot.send_message(chat_id, f"@{user_sender.username}, напишите в ответ на это сообщение Username пользователя, которому Вы хотите передать Ничего.")
+      bot.register_next_step_handler(msg, balanceadd_step_taker, get_user(user_id))
+      return
+    else:
+      transaction.user_taker = get_user(call.data.split("_", 4)[4][1:])
+      admin_transactions_new[user_id] = transaction
+      bot.send_message(chat_id, f"Выберите количество ничего, которое Вы хотите отправить пользователю @{transaction.user_taker.username}:", reply_markup=keyboard_give_amount(user_id, 'balanceadd'))
+      return
+  # Команда /balance_add, блок amount
+  elif call.data.startswith(f"{user_id}_NTC_balanceadd_amount"):
+    if get_user(user_id).check_admin() == False: return 
+    bot.edit_message_reply_markup(
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      reply_markup=None
+    )
+    print("BALANCE_ADD: step 3")
+    if user_id not in admin_transactions_new:
+      print("ERROR: Missing the beginning of a transaction")
+      bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+      return
+    else:
+      transaction : Transaction = admin_transactions_new[user_id]
+    if call.data == f"{user_id}_NTC_balanceadd_amount_other":
+      msg = bot.send_message(chat_id, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
+      bot.register_next_step_handler(msg, balanceadd_step_amount, get_user(user_id))
+      return
+    else:
+      transaction.amount = int(call.data.split("_")[4])
+      if check_amount_admin(transaction.amount, chat_id) == False: return
+      transaction.user_giver.balance += transaction.amount
+      if transaction.check_transaction(chat_id) == False: 
+        transaction.user_giver.balance -= transaction.amount
+        return
+      with lock:
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (transaction.amount, transaction.user_giver.id))
+        database.commit()
+      print("SUCCESS: Command is valid")
+      transaction.transaction(chat_id)
+      del admin_transactions_new[user_id]
+      return
+
+###################################################################################################
+##                                             КОМАНДЫ                                           ##
+###################################################################################################
+
+# Обработчик команды /start
 @bot.message_handler(commands=['start'])
-def start(message):
+def start(message:telebot.types.Message):
   print_message(message)
   # Добавьте пользователя в базу данных, если его еще нет
   if check_user(message.from_user.id) is False:
-    user = User(message.from_user.id, message.from_user.username, random.randint(NOTHING_DEFAULT_MIN, NOTHING_DEFAULT__MAX))
+    user = User(message.from_user.id, message.from_user.username, random.randint(NOTHING_DEFAULT_MIN, NOTHING_DEFAULT_MAX))
     if user.check_admin() == True: secret_commands_doc = f'\n{message.from_user.first_name}, ты админ! Тебе доступны следующие секретные команды:\n1. /balance_add - добавить несколько Ничего на счет пользователя (в том числе и отрицательное количество).\n2. /balance_set - установить баланс пользователя.\n3. /balance_all - Список всех пользователей с их балансами.\n4. /stats_all - Статистика по всем пользователям.\n'
     else: secret_commands_doc = ''
     cursor.execute("INSERT INTO users (id, username, balance) VALUES (?, ?, ?)", (user.id, user.username, user.balance))
@@ -340,70 +538,100 @@ def start(message):
   return
 
 ####################################################################################################
-# Обработчик команды /give
 
+# Обработчик команды /give
 @bot.message_handler(commands=['give'])
-def give(message):
+def give(message:telebot.types.Message):
+  chat_id = message.chat.id
+  user_id = message.from_user.id
   print_message(message)
   print("GIVE: step 1")
-  transaction = Transaction(user_giver = get_user(message.from_user.id))
-  if check_sender(transaction.user_giver, message) == False: return
-  #Команда с двумя аргументами
-  #if len(message.text.split(' ')) == 3:
-  #  print("Is3")
-  #  tr_data.amount = message.text.split(' ', 2)[1]
-  #  if check_amount(tr_data.amount, message) == False: return
-  #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
-  #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
-  #  with lock:
-  #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
-  #    tr_data.user_taker = cursor.fetchone()
-  #  print("SUCCESS: Command is valid")
-  #  #Отправка Ничего
-  #  transaction(tr_data, message)
-  #  return
-  #else:
+  user_giver = get_user(message.from_user.id)
+  if check_sender(user_giver, chat_id) == False: return
+  transactions_new[user_id] = Transaction(user_giver)
   print("GIVE: Separate commands")
-  msg = bot.reply_to(message, "Напишите в ответ на это сообщение Username пользователя, которому хотите передать Ничего.")
-  bot.register_next_step_handler(msg, give_step_taker, transaction)
+  user_selected[message.chat.id] = None
+  user_list = set()
+  if message.chat.type in ["group","supergroup","channel"]:
+    for user in get_users_all(): 
+      try:
+        status = bot.get_chat_member(message.chat.id, user.id).status
+        if status in ['member', 'administrator', 'creator']:
+            print(f"User is in the chat: {status}")
+            user_list.update(user.id)
+        else:
+            print(f"User is not in the chat: {status}")
+      except telebot.apihelper.ApiTelegramException as e:
+        print(f"ERROR: Can't get user information: {e}") 
+  else:
+    user_history = user_giver.get_transactions()
+    for item in user_history: user_list.update(set([item.user_giver.id,item.user_taker.id])) 
+    if len(user_list) == 0:
+      print("NOTE: No transactions were found. Reply logic initiated.")
+      msg = bot.reply_to(message, "Напишите в ответ на это сообщение Username пользователя, которому хотите передать Ничего.")
+      bot.register_next_step_handler(msg, give_step_taker)
+      return 
+  user_list.remove(user_giver.id)
+  user_list.remove(user_bot.id)
+  bot.send_message(message.chat.id, "Выберите пользователя, которому Вы хотите отправить ничего:", reply_markup=keyboard_give_user(message.from_user.id, user_list, 'give'))
+  return
 
-def give_step_taker(message, transaction:Transaction):
+def give_step_taker(message:telebot.types.Message):
   print_message(message)
-  if message.from_user.id != transaction.user_giver.id:
+  user_id = message.from_user.id
+  chat_id = message.chat.id
+  if user_id not in transactions_new:
+    print("ERROR: Missing the beginning of a transaction")
+    bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+    return
+  else:
+      transaction : Transaction = transactions_new[user_id]
+  if transaction.user_giver.id not in [message.from_user.id, user_bot.id]:
     print('ERROR: Sequence broken by different user!')
     bot.reply_to(message, f"Я ожидал сообщение от @{transaction.user_giver.username}, а не от @{message.from_user.username}!")
     return
   print("GIVE: step 2")
   transaction.user_taker = get_user(message.text.replace("@", ""))
   print(transaction)
-  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
-  msg = bot.reply_to(message, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
-  bot.register_next_step_handler(msg, give_step_amount, transaction)
+  if check_taker(transaction.user_taker, transaction.user_giver, chat_id) == False: return
+  # msg = bot.reply_to(message, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
+  # bot.register_next_step_handler(msg, give_step_amount, transaction)
+  bot.send_message(message.chat.id, f"Выберите количество ничего, которое Вы хотите отправить пользователю {transaction.user_taker.username}", reply_markup=keyboard_give_amount(message.from_user.id, 'give'))
 
-def give_step_amount(message, transaction:Transaction):
+def give_step_amount(message:telebot.types.Message):
   print_message(message)
-  if message.from_user.id != transaction.user_giver.id:
+  user_id = message.from_user.id
+  chat_id = message.chat.id
+  if user_id not in transactions_new:
+    print("ERROR: Missing the beginning of a transaction")
+    bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+    return
+  else:
+      transaction : Transaction = transactions_new[user_id]
+  if transaction.user_giver.id not in [message.from_user.id, user_bot.id]:
     print('ERROR: Sequence broken by different user!')
     bot.reply_to(message, f"Я ожидал сообщение от @{transaction.user_giver.username}, а не от @{message.from_user.username}!")
     return
   print("GIVE: step 3")
   transaction.amount = int(message.text)
-  if check_amount(transaction.amount, message) == False: return
-  if transaction.check_transaction(message) == False: return
+  if check_amount(transaction.amount, chat_id) == False: return
+  if transaction.check_transaction(chat_id) == False: return
   print("SUCCESS: Command is valid")
-  transaction.transaction(message)
+  transaction.transaction(chat_id)
+  del transactions_new[user_id]
 
 ####################################################################################################
-# Обработчик команды /balance
 
+# Обработчик команды /balance
 @bot.message_handler(commands=['balance'])
-def balance(message):
+def balance(message:telebot.types.Message):
+  chat_id = message.chat.id
   user = User()
   print_message(message)
   usernames = message.text.split(' ')
   if len(usernames) == 1:
     user = get_user(message.from_user.username)
-    if check_sender(user, message) == False: return
+    if check_sender(user, chat_id) == False: return
     bot.send_message(message.chat.id, f"{message.from_user.first_name}, твой баланс: {user.balance} Ничего.")
     print("SUCCESS: Balance is sent")
   else:
@@ -424,10 +652,10 @@ def balance(message):
   return
 
 ####################################################################################################
-# Обработчик команды /balance_all
 
+# Обработчик команды /balance_all
 @bot.message_handler(commands=['balance_all'])
-def balance_all(message):
+def balance_all(message:telebot.types.Message):
   print_message(message)
   if get_user(message.from_user.id).check_admin() == False: return
   users = get_users_all()
@@ -443,10 +671,10 @@ def balance_all(message):
   return
 
 ####################################################################################################
-# Обработчик команды /stats
 
+# Обработчик команды /stats
 @bot.message_handler(commands=['stats'])
-def stats(message):
+def stats(message:telebot.types.Message):
   print_message(message)
   usernames = message.text.split(' ')
   if len(usernames) == 1:
@@ -497,10 +725,10 @@ def stats(message):
   return
 
 ####################################################################################################
-# Обработчик команды /stats_all
 
+# Обработчик команды /stats_all
 @bot.message_handler(commands=['stats_all'])
-def stats_all(message):
+def stats_all(message:telebot.types.Message):
   print_message(message)
   if get_user(message.from_user.id).check_admin() == False: return
   users = get_users_all()
@@ -528,10 +756,10 @@ def stats_all(message):
   return
 
 ####################################################################################################
-# Обработчик команды /history
 
+# Обработчик команды /history
 @bot.message_handler(commands=['history'])
-def history(message):
+def history(message:telebot.types.Message):
   print_trans_db()
   print_message(message)
   if len(message.text.split(' ',1)) == 1:
@@ -577,10 +805,10 @@ def history(message):
   return
 
 ####################################################################################################
-# Обработчик команды /history_all
 
+# Обработчик команды /history_all
 @bot.message_handler(commands=['history_all'])
-def history_all(message):
+def history_all(message:telebot.types.Message):
   print_trans_db()
   print_message(message)
   if get_user(message.from_user.id).check_admin() == False: return
@@ -604,71 +832,83 @@ def history_all(message):
   return
 
 ####################################################################################################
+
 # Обработчик команды /balance_add
-
 @bot.message_handler(commands=['balance_add'])
-def balance_add(message):
+def balance_add(message:telebot.types.Message):
+  chat_id = message.chat.id
+  user_id = message.from_user.id
   print_message(message)
-  admin: User = get_user(message.from_user.id)
-  if get_user(admin.id).check_admin() == False: return
-  print("BALANCE_ADD: step 1")
-  transaction = Transaction(user_giver = user_bot)
-  #Команда с двумя аргументами
-  #if len(message.text.split(' ')) == 3:
-  #  print("Is3")
-  #  tr_data.amount = message.text.split(' ', 2)[1]
-  #  if check_amount(tr_data.amount, message) == False: return
-  #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
-  #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
-  #  with lock:
-  #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
-  #    tr_data.user_taker = cursor.fetchone()
-  #  print("SUCCESS: Command is valid")
-  #  #Отправка Ничего
-  #  transaction(tr_data, message)
-  #  return
-  #else:
-  print("BALANCE_ADD: Separate commands")
-  msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши Username пользователя, которому Биржа начислит Ничего")
-  bot.register_next_step_handler(msg, balance_add_step_taker, transaction, admin)
+  print("BALANCEADD: step 1")
+  user_giver = user_bot
+  admin_transactions_new[user_id] = Transaction(user_giver)
+  print("BALANCEADD: Separate commands")
+  user_selected[chat_id] = None
+  user_list = set([user.id for user in get_users_all()])
+  user_list.remove(user_giver.id)
+  if len(user_list) == 0:
+    print("NOTE: No transactions were found. Reply logic initiated.")
+    msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши Username пользователя, которому Биржа начислит Ничего")
+    bot.register_next_step_handler(msg, balanceadd_step_taker, admin = get_user(user_id))
+    return
+  bot.send_message(chat_id, "Выберите пользователя, которому Вы хотите отправить ничего:", reply_markup=keyboard_give_user(message.from_user.id, user_list, 'balanceadd'))
+  return
 
-def balance_add_step_taker(message, transaction:Transaction, admin:User):
+def balanceadd_step_taker(message:telebot.types.Message, admin: User):
   print_message(message)
+  user_id = message.from_user.id
+  chat_id = message.chat.id
+  if user_id not in admin_transactions_new:
+    print("ERROR: Missing the beginning of a transaction")
+    bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+    return
+  else:
+      transaction : Transaction = admin_transactions_new[user_id]
   if message.from_user.id != admin.id:
     print('ERROR: Sequence broken by different user!')
     bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
     return
-  print("BALANCE_ADD: step 2")
+  print("GIVE: step 2")
   transaction.user_taker = get_user(message.text.replace("@", ""))
   print(transaction)
-  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
-  msg = bot.reply_to(message, "Напишите количество Ничего, которое Биржа начислит пользователю")
-  bot.register_next_step_handler(msg, balance_add_step_amount, transaction, admin)
+  if check_taker(transaction.user_taker, transaction.user_giver, chat_id) == False: return
+  # msg = bot.reply_to(message, "Напишите в ответ на это сообщение количество Ничего, которое хотите передать.")
+  # bot.register_next_step_handler(msg, balanceadd_step_amount, transaction)
+  bot.send_message(message.chat.id, f"Выберите количество ничего, которое Вы хотите отправить пользователю {transaction.user_taker.username}", reply_markup=keyboard_give_amount(message.from_user.id, 'balanceadd'))
 
-def balance_add_step_amount(message, transaction:Transaction, admin:User):
+def balanceadd_step_amount(message:telebot.types.Message, admin:User):
   print_message(message)
-  if message.from_user.id != admin.id:
+  user_id = message.from_user.id
+  chat_id = message.chat.id
+  if user_id != admin.id:
     print('ERROR: Sequence broken by different user!')
     bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
     return
+  if user_id not in admin_transactions_new:
+    print("ERROR: Missing the beginning of a transaction")
+    bot.send_message(chat_id, "Ошибка! Отсутствует начало транзакции. Начните транзакцию снова")
+    return
+  else:
+      transaction : Transaction = admin_transactions_new[user_id]
   print("BALANCE_ADD: step 3")
   transaction.amount = int(message.text)
-  if check_amount_admin(transaction.amount, message) == False: return
+  if check_amount_admin(transaction.amount, chat_id) == False: return
   transaction.user_giver.balance += transaction.amount
-  if transaction.check_transaction(message) == False: 
+  if transaction.check_transaction(chat_id) == False: 
     transaction.user_giver.balance -= transaction.amount
     return
   with lock:
     cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (transaction.amount, transaction.user_giver.id))
     database.commit()
   print("SUCCESS: Command is valid")
-  transaction.transaction(message)
+  del admin_transactions_new[user_id]
+  transaction.transaction(chat_id)
 
 ####################################################################################################
-# Обработчик команды /balance_set
 
+# Обработчик команды /balance_set
 @bot.message_handler(commands=['balance_set'])
-def balance_set(message):
+def balance_set(message:telebot.types.Message):
   print_message(message)
   admin: User = get_user(message.from_user.id)
   if get_user(admin.id).check_admin() == False: return
@@ -678,22 +918,23 @@ def balance_set(message):
   #if len(message.text.split(' ')) == 3:
   #  print("Is3")
   #  tr_data.amount = message.text.split(' ', 2)[1]
-  #  if check_amount(tr_data.amount, message) == False: return
+  #  if check_amount(tr_data.amount, chat_id) == False: return
   #  username_taker = message.text.split(' ', 2)[2].replace("@", "")
-  #  if check_taker(username_taker, tr_data.user_giver, message) == False: return
+  #  if check_taker(username_taker, tr_data.user_giver, chat_id) == False: return
   #  with lock:
   #    cursor.execute("SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username_taker,))
   #    tr_data.user_taker = cursor.fetchone()
   #  print("SUCCESS: Command is valid")
   #  #Отправка Ничего
-  #  transaction(tr_data, message)
+  #  transaction(tr_data, chat_id)
   #  return
   #else:
   print("BALANCE_ADD: Separate commands")
   msg = bot.reply_to(message, f"{message.from_user.first_name}, напиши в ответ на это сообщение Username пользователя, которому Биржа установит количество Ничего")
   bot.register_next_step_handler(msg, balance_set_step_taker, transaction, admin)
 
-def balance_set_step_taker(message, transaction:Transaction, admin:User):
+def balance_set_step_taker(message:telebot.types.Message, transaction:Transaction, admin:User):
+  chat_id = message.chat.id
   print_message(message)
   if message.from_user.id != admin.id:
     print('ERROR: Sequence broken by different user!')
@@ -702,31 +943,33 @@ def balance_set_step_taker(message, transaction:Transaction, admin:User):
   print("BALANCE_ADD: step 2")
   transaction.user_taker = get_user(message.text.replace("@", ""))
   print(transaction)
-  if check_taker(transaction.user_taker, transaction.user_giver, message) == False: return
+  if check_taker(transaction.user_taker, transaction.user_giver, chat_id) == False: return
   msg = bot.reply_to(message, "Напиши в ответ на это сообщение количество Ничего, которое Биржа установит пользователю")
   bot.register_next_step_handler(msg, balance_set_step_amount, transaction, admin)
 
-def balance_set_step_amount(message, transaction:Transaction, admin:User):
+def balance_set_step_amount(message:telebot.types.Message, transaction:Transaction, admin:User):
   print_message(message)
+  chat_id = message.chat.id
   if message.from_user.id != admin.id:
     print('ERROR: Sequence broken by different user!')
     bot.reply_to(message, f"Я ожидал сообщение от @{admin.username}, а не от @{message.from_user.username}!")
     return
   print("BALANCE_ADD: step 3")
   transaction.amount = int(message.text) - transaction.user_taker.balance
-  if check_amount_admin(transaction.amount, message) == False: return
+  if check_amount_admin(transaction.amount, chat_id) == False: return
   transaction.user_giver.balance += transaction.amount
-  if transaction.check_transaction(message) == False: 
+  if transaction.check_transaction(chat_id) == False: 
     transaction.user_giver.balance -= transaction.amount
     return
   with lock:
     cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (transaction.amount, transaction.user_giver.id))
     database.commit()
   print("SUCCESS: Command is valid")
-  transaction.transaction(message)
+  transaction.transaction(chat_id)
 
-####################################################################################################
-#запуск бота
+###################################################################################################
+##                                          ЗАПУСК БОТА                                          ##
+###################################################################################################
 
 #запускаем flask-сервер в отдельном потоке.
 #keep_alive()
