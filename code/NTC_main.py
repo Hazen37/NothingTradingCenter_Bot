@@ -364,7 +364,8 @@ def keyboard_give_amount(user_id, command):
   markup = telebot.types.InlineKeyboardMarkup(row_width=KEYBOARD_GIVE_NOTHING_WIDTH )
   # selected = user_selected.get(user_id, None)
   buttons = []
-  max_amount = min(KEYBOARD_GIVE_NOTHING_MAX, user.balance, TRANSACTION_LIMIT)
+  if command == 'give': max_amount = min(KEYBOARD_GIVE_NOTHING_MAX, user.balance, TRANSACTION_LIMIT)
+  elif command == 'balanceadd': max_amount = min(KEYBOARD_GIVE_NOTHING_MAX, user.balance, TRANSACTION_LIMIT)
   for i in range(KEYBOARD_GIVE_NOTHING_MIN, max_amount + 1):
     buttons.append(telebot.types.InlineKeyboardButton(text=f"{i}", callback_data=f"{user_id}_NTC_{command}_amount_{i}"))
   # Разбиваем кнопки по рядам
